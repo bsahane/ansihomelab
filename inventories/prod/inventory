@@ -1,2 +1,2 @@
-[pve-prod]
+[pve_prod]
 ubuntu-prod.pve.tech247.in ansible_host=192.168.50.51

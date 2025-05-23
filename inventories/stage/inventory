@@ -1,2 +1,2 @@
-[pve-stage]
+[pve_stage]
 fedora.stage.pve.tech247.in ansible_host=192.168.50.11
