@@ -1,0 +1,128 @@
+---
+- hosts: '{{ hostname_var | default("all") }}'
+  gather_facts: true
+  become: true
+  vars:
+    reboot_is_required_final: false
+  tasks:
+    - name: Update all packages
+      ansible.builtin.package:
+        name: "*"
+        state: latest
+
+    - name: Ensure reboot check utilities are present (RHEL 7 / CentOS 7)
+      ansible.builtin.package:
+        name: yum-utils
+        state: present
+      when: ansible_os_family == "RedHat" and ansible_distribution_major_version == "7"
+
+    - name: Ensure reboot check utilities are present (RHEL 8+, Fedora, AlmaLinux, Rocky etc.)
+      ansible.builtin.package:
+        name: dnf-utils
+        state: present
+      when:
+        - ansible_os_family == "RedHat"
+        - (ansible_distribution == "Fedora" or ansible_distribution_major_version | int >= 8)
+
+    - name: Ensure reboot check utilities are present (Debian/Ubuntu)
+      ansible.builtin.package:
+        name: update-notifier-common
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Ensure reboot check utilities are present (SUSE)
+      ansible.builtin.package:
+        name: zypper-needs-restarting
+        state: present
+      when: ansible_os_family == "Suse"
+      ignore_errors: true
+
+    - name: Ensure reboot check utilities are present (Arch Linux)
+      ansible.builtin.package:
+        name: pacman-contrib
+        state: present
+      when: ansible_os_family == "Archlinux"
+
+    - name: Check if reboot is required on RHEL/Fedora family
+      block:
+        - name: RHEL/Fedora - Run 'needs-restarting -r' to check for reboot
+          ansible.builtin.command: "needs-restarting -r"
+          register: needs_restarting_result
+          changed_when: false
+          # rc = 0: no reboot needed
+          # rc = 1: reboot needed
+          # Other rc (e.g. > 1) indicates an error with the command itself.
+          failed_when: needs_restarting_result.rc > 1
+        - name: RHEL/Fedora - Set reboot flag if command indicates reboot is needed
+          ansible.builtin.set_fact:
+            reboot_is_required_final: true
+          when: needs_restarting_result.rc == 1
+      when: ansible_os_family == "RedHat"
+      ignore_errors: true
+
+    - name: Check if reboot is required on Debian/Ubuntu family
+      block:
+        - name: Debian/Ubuntu - Check for existence of /var/run/reboot-required file
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: reboot_required_file_debian
+        - name: Debian/Ubuntu - Set reboot flag if /var/run/reboot-required exists
+          ansible.builtin.set_fact:
+            reboot_is_required_final: true
+          when: reboot_required_file_debian.stat.exists
+      when: ansible_os_family == "Debian"
+
+    - name: Check if reboot is required on SUSE family (SLES, openSUSE)
+      block:
+        - name: SUSE - Check with 'zypper needs-rebooting'
+          ansible.builtin.command: "zypper --non-interactive needs-rebooting"
+          register: zypper_needs_rebooting_result
+          changed_when: false
+          failed_when: zypper_needs_rebooting_result.rc not in [0, 102, 103]
+        - name: SUSE - Set reboot flag if zypper indicates reboot is needed
+          ansible.builtin.set_fact:
+            reboot_is_required_final: true
+          when: zypper_needs_rebooting_result.rc == 102 or zypper_needs_rebooting_result.rc == 103
+      when: ansible_os_family == "Suse"
+      ignore_errors: true
+
+    - name: Check if reboot is required on Arch Linux family
+      block:
+        - name: Arch - Attempt to run reboot-required.sh (from pacman-contrib)
+          ansible.builtin.command: "/usr/bin/reboot-required.sh"
+          register: arch_reboot_script_result
+          changed_when: false
+          # rc = 0: no reboot needed
+          # rc = 1: reboot needed
+          failed_when: arch_reboot_script_result.rc > 1
+          ignore_errors: true
+
+        - name: Arch - Set reboot flag based on reboot-required.sh script
+          ansible.builtin.set_fact:
+            reboot_is_required_final: true
+          when:
+            - arch_reboot_script_result is defined
+            - not arch_reboot_script_result.failed
+            - arch_reboot_script_result.rc == 1
+
+        - name: Arch - Fallback: Check for /var/run/reboot-required file (if not already set by script)
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: reboot_required_file_arch
+          when: not reboot_is_required_final
+        - name: Arch - Set reboot flag from file existence
+          ansible.builtin.set_fact:
+            reboot_is_required_final: true
+          when:
+            - not reboot_is_required_final
+            - reboot_required_file_arch.stat.exists
+      when: ansible_os_family == "Archlinux"
+
+    - name: Display final reboot status
+      ansible.builtin.debug:
+        msg: "Reboot status for {{ inventory_hostname }}: {{ 'Reboot IS required.' if reboot_is_required_final else 'Reboot is NOT required.' }}"
+
+    - name: Reboot machine if required
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when: reboot_is_required_final
