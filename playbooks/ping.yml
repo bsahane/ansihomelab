@@ -1,0 +1,8 @@
+---
+- name: Ping Playbook
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Display User and Host Information
+      ansible.builtin.debug:
+        msg: "Working as: {{ ansible_user_id }}@{{ ansible_fqdn }} ({{ inventory_hostname }})"
