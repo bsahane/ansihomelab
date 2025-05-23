@@ -1,5 +1,6 @@
 ---
-- hosts: '{{ hostname_var | default("all") }}'
+- name: Patch Playbook
+  hosts: all
   gather_facts: true
   become: true
   vars:
