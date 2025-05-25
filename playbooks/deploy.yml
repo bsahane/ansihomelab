@@ -1,6 +1,6 @@
 ---
 - name: Build Proxmox VM or Container from Template
-  hosts: proxmox
+  hosts: "{{ target_hosts | default('proxmox') }}"
   gather_facts: false
   vars:
     # AWX Survey Variables - These will be populated by AWX survey
@@ -37,6 +37,21 @@
     dns_servers: "{{ dns_servers }}"
 
   tasks:
+    - name: Verify we're running on correct host
+      fail:
+        msg: "This playbook should only run on Proxmox hosts in the 'proxmox' group"
+      when: group_names is not defined or 'proxmox' not in group_names
+
+    - name: Install required Python modules
+      pip:
+        name:
+          - proxmoxer
+          - requests
+        state: present
+      delegate_to: localhost
+      run_once: true
+      ignore_errors: yes
+
     - name: Validate deployment type
       fail:
         msg: "deployment_type must be either 'container' or 'vm'"
