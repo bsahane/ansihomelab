@@ -1,2 +1,16 @@
 [pve_prod]
 ubuntu-prod.pve.tech247.in ansible_host=192.168.50.51
+
+[proxmox]
+pve ansible_host=192.168.50.29 ansible_user=root ansible_connection=local
+
+[proxmox:vars]
+# Default Proxmox settings
+proxmox_node=pve
+network_bridge=vmbr0
+network_gateway=192.168.50.1
+network_netmask=24
+dns_servers=1.1.1.1,192.168.50.1,8.8.8.8,8.8.4.4
+
+# Python interpreter for Proxmox modules
+ansible_python_interpreter=/usr/bin/python3

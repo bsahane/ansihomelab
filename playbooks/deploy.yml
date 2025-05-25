@@ -1,0 +1,232 @@
+---
+- name: Build Proxmox VM or Container from Template
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    # AWX Survey Variables - These will be populated by AWX survey
+    deployment_type: "{{ deployment_type | default('container') }}"  # container or vm
+    template_selection: "{{ template_selection | default('') }}"
+    hostname: "{{ hostname | default('test-host') }}"
+    cpu_cores: "{{ cpu_cores | default(2) | int }}"
+    ram_size: "{{ ram_size | default(2048) | int }}"  # In MB
+    hdd_space: "{{ hdd_space | default(20) | int }}"  # In GB
+    ip_address: "{{ ip_address | default('') }}"
+    
+    # Proxmox connection details
+    proxmox_host: "{{ ansible_host }}"
+    proxmox_user: "{{ proxmox_user | default('root@pam') }}"
+    proxmox_password: "{{ proxmox_password }}"
+    proxmox_node: "{{ proxmox_node | default('pve') }}"
+    
+    # Container template mappings
+    container_templates:
+      alpine: "alpine-3.21-default_20241217_amd64.tar.xz"
+      debian: "debian-12-standard_12.7-1_amd64.tar.zst"
+      fedora: "fedora-41-default_20241118_amd64.tar.xz"
+      ubuntu: "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    
+    # VM template mappings
+    vm_templates:
+      fedora: 1001  # cloudinit.fedora
+      ubuntu: 2001  # cloudinit.ubuntu
+    
+    # Network configuration
+    network_bridge: "{{ network_bridge | default('vmbr0') }}"
+    network_gateway: "{{ network_gateway | default('192.168.1.1') }}"
+    network_netmask: "{{ network_netmask | default('24') }}"
+    dns_servers: "{{ dns_servers | default('8.8.8.8,8.8.4.4') }}"
+
+  tasks:
+    - name: Validate deployment type
+      fail:
+        msg: "deployment_type must be either 'container' or 'vm'"
+      when: deployment_type not in ['container', 'vm']
+
+    - name: Validate template selection for containers
+      fail:
+        msg: "Invalid container template. Choose from: {{ container_templates.keys() | list }}"
+      when: 
+        - deployment_type == 'container'
+        - template_selection not in container_templates.keys()
+
+    - name: Validate template selection for VMs
+      fail:
+        msg: "Invalid VM template. Choose from: {{ vm_templates.keys() | list }}"
+      when: 
+        - deployment_type == 'vm'
+        - template_selection not in vm_templates.keys()
+
+    - name: Generate unique VMID for new deployment
+      set_fact:
+        vmid: "{{ 9000 + (ansible_date_time.epoch | int % 1000) }}"
+
+    - name: Display deployment summary
+      debug:
+        msg: |
+          Deployment Summary:
+          ==================
+          Type: {{ deployment_type | upper }}
+          Template: {{ template_selection }}
+          Hostname: {{ hostname }}
+          VMID: {{ vmid }}
+          CPU Cores: {{ cpu_cores }}
+          RAM: {{ ram_size }}MB
+          Storage: {{ hdd_space }}GB
+          IP Address: {{ ip_address }}
+
+    # Container Deployment Tasks
+    - block:
+        - name: Create LXC Container
+          community.general.proxmox:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            hostname: "{{ hostname }}"
+            ostemplate: "{{ container_templates[template_selection] }}"
+            cores: "{{ cpu_cores }}"
+            memory: "{{ ram_size }}"
+            swap: "{{ ram_size // 2 }}"
+            disk: "{{ hdd_space }}"
+            netif: |
+              {
+                "net0": "name=eth0,bridge={{ network_bridge }},ip={{ ip_address }}/{{ network_netmask }},gw={{ network_gateway }}"
+              }
+            onboot: true
+            unprivileged: true
+            validate_certs: false
+            state: present
+          register: container_result
+
+        - name: Start LXC Container
+          community.general.proxmox:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            validate_certs: false
+            state: started
+          when: container_result is succeeded
+
+        - name: Configure container DNS (if IP provided)
+          community.general.proxmox:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            nameserver: "{{ dns_servers }}"
+            validate_certs: false
+            state: present
+          when: ip_address != ""
+
+      when: deployment_type == 'container'
+
+    # VM Deployment Tasks
+    - block:
+        - name: Clone VM from template
+          community.general.proxmox_kvm:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            clone: "{{ vm_templates[template_selection] }}"
+            name: "{{ hostname }}"
+            newid: "{{ vmid }}"
+            full: true
+            validate_certs: false
+            state: present
+          register: vm_clone_result
+
+        - name: Configure VM resources
+          community.general.proxmox_kvm:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            cores: "{{ cpu_cores }}"
+            memory: "{{ ram_size }}"
+            validate_certs: false
+            state: present
+          when: vm_clone_result is succeeded
+
+        - name: Resize VM disk
+          community.general.proxmox_disk:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            disk: "scsi0"
+            size: "{{ hdd_space }}G"
+            validate_certs: false
+            state: resized
+          when: vm_clone_result is succeeded
+
+        - name: Configure cloud-init network (if IP provided)
+          uri:
+            url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/config"
+            method: POST
+            user: "{{ proxmox_user }}"
+            password: "{{ proxmox_password }}"
+            force_basic_auth: yes
+            validate_certs: false
+            body_format: form-urlencoded
+            body:
+              ipconfig0: "ip={{ ip_address }}/{{ network_netmask }},gw={{ network_gateway }}"
+              nameserver: "{{ dns_servers }}"
+          when: 
+            - ip_address != ""
+            - vm_clone_result is succeeded
+
+        - name: Start VM
+          community.general.proxmox_kvm:
+            vmid: "{{ vmid }}"
+            node: "{{ proxmox_node }}"
+            api_user: "{{ proxmox_user }}"
+            api_password: "{{ proxmox_password }}"
+            api_host: "{{ proxmox_host }}"
+            validate_certs: false
+            state: started
+          when: vm_clone_result is succeeded
+
+      when: deployment_type == 'vm'
+
+    - name: Wait for deployment to be accessible
+      wait_for:
+        host: "{{ ip_address }}"
+        port: 22
+        delay: 30
+        timeout: 300
+      when: ip_address != ""
+
+    - name: Deployment completed successfully
+      debug:
+        msg: |
+          🎉 Deployment Completed Successfully!
+          =====================================
+          Type: {{ deployment_type | upper }}
+          Template: {{ template_selection }}
+          Hostname: {{ hostname }}
+          VMID: {{ vmid }}
+          IP Address: {{ ip_address if ip_address else 'DHCP' }}
+          
+          You can access your {{ deployment_type }} via:
+          - Proxmox Web UI: https://{{ proxmox_host }}:8006
+          - SSH (if configured): ssh user@{{ ip_address }}
+
+  handlers:
+    - name: Cleanup on failure
+      community.general.proxmox_kvm:
+        vmid: "{{ vmid }}"
+        node: "{{ proxmox_node }}"
+        api_user: "{{ proxmox_user }}"
+        api_password: "{{ proxmox_password }}"
+        api_host: "{{ proxmox_host }}"
+        validate_certs: false
+        state: absent
+      when: ansible_failed_task is defined
