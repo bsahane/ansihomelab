@@ -1,0 +1,22 @@
+---
+- name: Proxmox VM Management
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Clone VM from template {{ template_to_clone }}
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_password: "{{ proxmox_api_password }}"
+        validate_certs: false
+        node: "{{ proxmox_node }}"
+        clone: "{{ template_to_clone }}"
+        newid: "{{ new_vm_id }}"
+        name: "{{ new_vm_name }}"
+        # You can add more options here, like:
+        memory: "{{ new_vm_memory_mb }}"
+        cores: "{{ new_vm_cores }}"
+        # disk: "{{ new_vm_disk_size }}"
+        state: present # Ensures the VM is created if it doesn't exist
+      delegate_to: localhost
