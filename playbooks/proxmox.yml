@@ -2,7 +2,7 @@
 - name: Proxmox VM Management
   hosts: localhost
   gather_facts: false
-
+  become: false
   tasks:
     - name: Clone VM from template {{ template_to_clone }}
       community.general.proxmox_kvm:
