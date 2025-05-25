@@ -1,6 +1,3 @@
-[pve_prod]
-ubuntu-prod.pve.tech247.in ansible_host=192.168.50.51
-
 [proxmox]
 pve ansible_host=192.168.50.29 ansible_user=root ansible_connection=local
 
