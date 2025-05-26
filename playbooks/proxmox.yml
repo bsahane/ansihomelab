@@ -5,7 +5,7 @@
   become: false
   tasks:
     - name: Install python3-pip
-      ansible.builtin.yum:
+      ansible.builtin.apt:
         name: python3-pip
         state: present
       become: yes
