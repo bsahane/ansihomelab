@@ -1,2 +1,2 @@
 [pve_prod]
-fedora-61-prod.local.lab ansible_host=10.10.10.61
+10.10.10.61
